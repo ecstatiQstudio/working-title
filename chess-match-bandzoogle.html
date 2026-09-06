@@ -1,0 +1,392 @@
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/chessboard-js/1.0.0/chessboard-1.0.0.min.css" referrerpolicy="no-referrer">
+
+<style>
+    #ecstatiQ-chess-app-wrapper {
+        background-color: rgba(0, 0, 0, 0.5) !important;
+        border: 0 !important;
+        margin: 20px auto !important;
+        padding: 15px;
+        border-radius: 8px;
+        box-sizing: border-box !important;
+        width: 100% !important;
+        max-width: 450px !important;
+        opacity: 0.65;
+    }
+
+    #ecstatiQ-interactive-board {
+        width: 100% !important;
+        max-width: 100% !important;
+        margin: 0 auto 15px auto !important;
+        display: block !important;
+    }
+
+    #ecstatiQ-interactive-board .board-b72b1 {
+        display: grid !important;
+        grid-template-rows: repeat(8, 1fr) !important;
+        width: 100% !important;
+        height: auto !important;
+        aspect-ratio: 1 / 1 !important;
+    }
+
+    #ecstatiQ-interactive-board .row-5277c {
+        display: grid !important;
+        grid-template-columns: repeat(8, 1fr) !important;
+        width: 100% !important;
+        height: 100% !important;
+    }
+
+    #ecstatiQ-interactive-board .square-55d63 {
+        width: 100% !important;
+        position: relative !important;
+        box-sizing: border-box !important;
+        display: block !important;
+    }
+
+    #ecstatiQ-interactive-board img {
+        width: 100% !important;
+        height: 100% !important;
+        display: block !important;
+    }
+
+    #ecstatiQ-interactive-board notation {
+        position: absolute !important;
+        z-index: 10 !important;
+    }
+
+    #ecstatiQ-interactive-board .ecstatiQ-vote-highlight {
+        background-color: rgba(40, 167, 69, 0.4) !important;
+        box-shadow: inset 0 0 0 3px #28a745 !important;
+    }
+</style>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js" referrerpolicy="no-referrer"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/chessboard-js/1.0.0/chessboard-1.0.0.min.js" referrerpolicy="no-referrer"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2" referrerpolicy="no-referrer"></script>
+
+<div id="ecstatiQ-chess-app-wrapper" style="text-align:center;border:1px solid #ddd;padding:15px;border-radius:8px;background:#fff;">
+    <p id="ecstatiQ-turn-indicator" style="font-weight:bold;margin:5px 0 5px 0;text-transform:uppercase;">
+        Loading game...
+    </p>
+    <div id="ecstatiQ-timer-box" style="font-weight:bold;margin-bottom:15px;color:#d9534f;display:none;">
+        Voting Ends In: <span id="ecstatiQ-time-left">--:--:--</span>
+    </div>
+    <div id="ecstatiQ-interactive-board" style="margin:0 auto 15px auto;">
+    </div>
+    <div id="ecstatiQ-vote-feedback" style="font-weight:bold;color:#5cb85c;margin-bottom:5px;">
+    </div>
+    <button id="ecstatiQ-takeback-btn" onclick="handleDeliberateTakeback()" style="display:none;margin:15px auto 15px auto;padding:8px 16px;background-color:#d9534f;color:white;border:none;border-radius:4px;font-weight:bold;cursor:pointer;font-size:13px;text-transform:uppercase;letter-spacing:0.5px;transition:background-color 0.2s;">
+        Take Back / Change Vote
+    </button>
+    <div id="ecstatiQ-leaderboard-wrapper" style="font-weight:bold;margin-top:15px;padding-top:5px;text-align:left;">
+        <p style="margin:0 0 10px 0;text-transform:uppercase;">
+            📊 Leaderboard for Chérie's Next Move
+        </p>
+        <ul id="ecstatiQ-vote-tally-list" style="list-style:none;padding:0;margin:0;">
+            <li style="font-style:italic;">
+                No votes cast yet this turn...
+            </li>
+        </ul>
+    </div>
+    <div id="ecstatiQ-move-history-wrapper" style="font-weight:bold;padding-top:15px;text-align:left;">
+        <p style="margin:0 0 10px 0;text-transform:uppercase;">
+            📜 Game History
+        </p>
+        <div id="ecstatiQ-move-history-log" style="background:rgb(229, 227, 215);border:1px solid #eef0f2;padding:10px;border-radius:6px;max-height:80px;overflow-y:auto;color:#000;">
+            <p>
+                No moves recorded yet...
+            </p>
+        </div>
+    </div>
+</div>
+
+<script>
+    window.hasUserVotedThisTurn = false;
+    var SUPABASE_URL = '';
+    var SUPABASE_KEY = '';
+    var VOTING_DURATION_MINUTES = 1440;
+    if (typeof window.supabaseClientInstance === 'undefined') {
+        window.supabaseClientInstance = window.supabase ? window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY) : null;
+    }
+    var supabase = window.supabaseClientInstance;
+    var chessEngine = new Chess();
+    var uiBoard = null;
+    var timerInterval = null;
+    var globalTimerEndsAt = null;
+    if (!localStorage.getItem('chess_session_token')) {
+        localStorage.setItem('chess_session_token', 'session_' + Math.random().toString(36).substr(2, 9));
+    }
+    var mySessionToken = localStorage.getItem('chess_session_token');
+
+    async function fetchLatestGameState() {
+        if (!supabase) {
+            return;
+        }
+        const { data, error } = await supabase.from('game_state').select('*').eq('id', 'live_game').single();
+        if (data) {
+            if (data.pgn) {
+                chessEngine.load_pgn(data.pgn);
+            }
+            else {
+                chessEngine.load(data.fen);
+            }
+            uiBoard.position(data.fen);
+            renderMoveHistoryLog();
+            globalTimerEndsAt = data.timer_ends_at ? new Date(data.timer_ends_at) : null;
+            updateUIStatus(data.turn);
+            refreshVoteLeaderboard();
+            if (data.turn === 'w') {
+                const { data: userVote } = await supabase
+                    .from('move_votes')
+                    .select('move_san')
+                    .eq('player_session', mySessionToken)
+                    .maybeSingle();
+                if (userVote && userVote.move_san) {
+                    window.hasUserVotedThisTurn = true;
+                    var preValidationEngine = new Chess(chessEngine.fen());
+                    preValidationEngine.move(userVote.move_san);
+                    uiBoard.position(preValidationEngine.fen(), false);
+                    highlightVotedMoveOnUi(userVote.move_san);
+                    document.getElementById('ecstatiQ-vote-feedback').innerText = `Your active vote is: ${userVote.move_san}`;
+                    document.getElementById('ecstatiQ-takeback-btn').style.display = 'block';
+                }
+            }
+        }
+    }
+
+    async function handleDeliberateTakeback() {
+        if (!supabase) {
+            return;
+        }
+        document.getElementById('ecstatiQ-vote-feedback').style.color = '#666';
+        document.getElementById('ecstatiQ-vote-feedback').innerText = 'Retracting your vote...';
+        const { error } = await supabase
+            .from('move_votes')
+            .delete()
+            .eq('player_session', mySessionToken);
+        if (!error) {
+            window.hasUserVotedThisTurn = false;
+            highlightVotedMoveOnUi(null);
+            document.getElementById('ecstatiQ-takeback-btn').style.display = 'none';
+            document.getElementById('ecstatiQ-vote-feedback').style.color = '#5cb85c';
+            document.getElementById('ecstatiQ-vote-feedback').innerText = 'Vote retracted! Your board has been reset.';
+            uiBoard.position(chessEngine.fen(), true);
+            refreshVoteLeaderboard();
+        }
+    }
+
+    function handleDragStart(source, piece, position, orientation) {
+        if (chessEngine.game_over()) {
+            return false;
+        }
+        if (chessEngine.turn() !== 'w' || piece.search(/^b/) !== -1) {
+            return false;
+        }
+        if (window.hasUserVotedThisTurn === true) {
+            document.getElementById('ecstatiQ-vote-feedback').innerText = 'Take Back / Change Vote before moving another piece';
+            document.getElementById('ecstatiQ-vote-feedback').style.color = '#d9534f';
+            return false;
+        }
+        return true;
+    }
+
+    async function handlePieceDrop(source, target) {
+        var validationEngine = new Chess(chessEngine.fen());
+        var validatedMove = validationEngine.move({
+            from: source,
+            to: target,
+            promotion: 'q'
+        });
+        if (validatedMove === null) {
+            setTimeout(function () {
+                uiBoard.position(chessEngine.fen(), false);
+            }, 50);
+            return 'snapback';
+        }
+        window.hasUserVotedThisTurn = true;
+        document.getElementById('ecstatiQ-vote-feedback').style.color = '#5cb85c';
+        document.getElementById('ecstatiQ-vote-feedback').innerText = 'Casting your vote in the cloud...';
+        const { error } = await supabase
+            .from('move_votes')
+            .insert([{
+                move_san: validatedMove.san,
+                player_session: mySessionToken
+            }]);
+        if (!error) {
+            document.getElementById('ecstatiQ-vote-feedback').innerText = `Your active vote is: ${validatedMove.san}`;
+            document.getElementById('ecstatiQ-takeback-btn').style.display = 'block';
+            highlightVotedMoveOnUi(validatedMove.san);
+            refreshVoteLeaderboard();
+        }
+        setTimeout(function () {
+            uiBoard.position(validationEngine.fen(), false);
+        }, 50);
+    }
+
+    function initBoard() {
+        uiBoard = Chessboard('ecstatiQ-interactive-board', {
+            draggable: true,
+            position: 'start',
+            onDragStart: handleDragStart,
+            onDrop: handlePieceDrop,
+            snapbackSpeed: 300,
+            pieceTheme: 'https://chessboardjs.com/img/chesspieces/wikipedia/{piece}.png'
+        });
+        setTimeout(function () { uiBoard.resize(); }, 150);
+        var boardElement = document.getElementById('ecstatiQ-interactive-board');
+        if (boardElement) {
+            var stopPassiveScrollIntervention = function (e) {
+                if (e.target.tagName === 'IMG' && e.target.src.indexOf('chesspieces') !== -1) {
+                    e.preventDefault();
+                }
+            };
+            boardElement.addEventListener('touchstart', stopPassiveScrollIntervention, { passive: false });
+            boardElement.addEventListener('touchmove', stopPassiveScrollIntervention, { passive: false });
+        }
+        fetchLatestGameState();
+        subscribeToLiveUpdates();
+    }
+
+    function highlightVotedMoveOnUi(moveSan) {
+        $('#ecstatiQ-interactive-board .square-55d63').removeClass('ecstatiQ-vote-highlight');
+        if (!moveSan || !uiBoard) {
+            return;
+        }
+        var tempEngine = new Chess(chessEngine.fen());
+        var processedMove = tempEngine.move(moveSan);
+        if (processedMove) {
+            $('#ecstatiQ-interactive-board .square-' + processedMove.from).addClass('ecstatiQ-vote-highlight');
+            $('#ecstatiQ-interactive-board .square-' + processedMove.to).addClass('ecstatiQ-vote-highlight');
+        }
+    }
+
+    async function refreshVoteLeaderboard() {
+        if (!supabase) {
+            return;
+        }
+        const { data: voteHistory, error } = await supabase.from('move_votes').select('move_san');
+        const listElement = document.getElementById('ecstatiQ-vote-tally-list');
+        if (error || !voteHistory || voteHistory.length === 0) {
+            listElement.innerHTML = `<li style="font-style: italic;">No votes cast yet this turn...</li>`;
+            return;
+        }
+        const totalVotesCount = voteHistory.length;
+        const counts = {};
+        voteHistory.forEach(v => {
+            counts[v.move_san] = (counts[v.move_san] || 0) + 1;
+        });
+        const sortedMoves = Object.keys(counts).map(move => {
+            return { name: move, votes: counts[move] };
+        }).sort((a, b) => b.votes - a.votes);
+        const TOP_N = 3;
+        var htmlString = '';
+        sortedMoves.slice(0, TOP_N).forEach((move, index) => {
+            const medal = index === 0 ? '🥇 ' : index === 1 ? '🥈 ' : index === 2 ? '🥉 ' : '';
+            const votePercentage = Math.round((move.votes / totalVotesCount) * 100);
+            htmlString += `
+      <li style="color: #000; position: relative; padding: 8px 10px; margin-bottom: 6px; background: rgb(229, 227, 215); border-left: 4px solid #007bff; border-radius: 0 4px 4px 0; overflow: hidden; display: flex; justify-content: space-between; align-items: center; font-weight: ${index === 0 ? 'bold' : 'normal'}; z-index: 1;">
+        <div style="position: absolute; top: 0; left: 0; bottom: 0; width: ${votePercentage}%; background: rgb(229, 227, 215); z-index: -1; transition: width 0.3s ease;"></div>
+        <span style="position: relative; z-index: 2;">${medal}<strong>${move.name}</strong></span>
+        <span style="color: #000; font-weight: bold; position: relative; z-index: 2; background: rgba(255,255,255,0.7); padding: 2px 6px; border-radius: 4px;">
+          ${votePercentage}%
+        </span>
+      </li>`;
+        });
+        listElement.innerHTML = htmlString;
+    }
+
+    function renderMoveHistoryLog() {
+        var pgnText = chessEngine.pgn();
+        var logElement = document.getElementById('ecstatiQ-move-history-log');
+        if (!pgnText || pgnText.trim() === '') {
+            logElement.innerHTML = `<span style="color: #000; font-style: italic;">Starting position...</span>`;
+            return;
+        }
+        var rawMoves = chessEngine.history({ verbose: true });
+        var formattedHtml = '';
+        for (var i = 0; i < rawMoves.length; i += 2) {
+            var moveNumber = Math.floor(i / 2) + 1;
+            var whiteMove = rawMoves[i] ? rawMoves[i].san : '';
+            var blackMove = rawMoves[i + 1] ? rawMoves[i + 1].san : '';
+            formattedHtml += `
+          <span style="display: inline-block; margin-right: 12px;">
+            <strong style="color: #000;">${moveNumber}.</strong> 
+            <span style="font-weight: bold; color: #000;">${whiteMove}</span> 
+            <span style="color: #808080;">${blackMove}</span>
+          </span>`;
+        }
+        logElement.innerHTML = formattedHtml;
+        logElement.scrollTop = logElement.scrollHeight;
+    }
+
+    function startCountDownTracker() {
+        timerInterval = setInterval(() => {
+            if (!globalTimerEndsAt) {
+                return;
+            }
+            const difference = globalTimerEndsAt - new Date();
+            if (difference <= 0) {
+                clearInterval(timerInterval);
+                document.getElementById('ecstatiQ-time-left').innerText = '00:00:00';
+                return;
+            }
+            const totalSeconds = Math.floor(difference / 1000);
+            const hours = Math.floor(totalSeconds / 3600);
+            const minutes = Math.floor((totalSeconds % 3600) / 60);
+            const seconds = totalSeconds % 60;
+            if (hours > 0) {
+                document.getElementById('ecstatiQ-time-left').innerText = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+            }
+            else {
+                document.getElementById('ecstatiQ-time-left').innerText = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+            }
+        }, 1000);
+    }
+
+    function subscribeToLiveUpdates() {
+        if (!supabase) {
+            return;
+        }
+        supabase.channel('public:game_state')
+            .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'game_state', filter: 'id=eq.live_game' }, payload => {
+                if (payload.new.pgn) {
+                    chessEngine.load_pgn(payload.new.pgn);
+                }
+                else {
+                    chessEngine.load(payload.new.fen);
+                }
+                renderMoveHistoryLog();
+                uiBoard.position(chessEngine.fen());
+                updateUIStatus(payload.new.turn);
+                highlightVotedMoveOnUi(null);
+                window.hasUserVotedThisTurn = false;
+                document.getElementById('ecstatiQ-takeback-btn').style.display = 'none';
+                document.getElementById('ecstatiQ-vote-feedback').innerText = '';
+            })
+            .subscribe();
+        supabase.channel('public:move_votes')
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'move_votes' }, () => {
+                refreshVoteLeaderboard();
+            })
+            .subscribe();
+    }
+
+    function updateUIStatus(turn) {
+        clearInterval(timerInterval);
+        const textElement = document.getElementById('ecstatiQ-turn-indicator');
+        const timerBox = document.getElementById('ecstatiQ-timer-box');
+        if (turn === 'w') {
+            textElement.innerText = 'Chérie\'s Move (voting active)';
+            timerBox.style.display = 'block';
+            startCountDownTracker();
+        }
+        else {
+            textElement.innerText = 'Antagonist\'s Move (waiting...)';
+            timerBox.style.display = 'none';
+        }
+    }
+
+    window.addEventListener('DOMContentLoaded', initBoard);
+    if (document.readyState === 'complete' || document.readyState === 'interactive') {
+        initBoard();
+    }
+</script>
