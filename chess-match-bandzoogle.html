@@ -1,4 +1,5 @@
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/chessboard-js/1.0.0/chessboard-1.0.0.min.css" referrerpolicy="no-referrer">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/chessboard-js/1.0.0/chessboard-1.0.0.min.css"
+    referrerpolicy="no-referrer">
 
 <style>
     #ecstatiQ-chess-app-wrapper {
@@ -60,10 +61,12 @@
 </style>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js" referrerpolicy="no-referrer"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/chessboard-js/1.0.0/chessboard-1.0.0.min.js" referrerpolicy="no-referrer"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/chessboard-js/1.0.0/chessboard-1.0.0.min.js"
+    referrerpolicy="no-referrer"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2" referrerpolicy="no-referrer"></script>
 
-<div id="ecstatiQ-chess-app-wrapper" style="text-align:center;border:1px solid #ddd;padding:15px;border-radius:8px;background:#fff;">
+<div id="ecstatiQ-chess-app-wrapper"
+    style="text-align:center;border:1px solid #ddd;padding:15px;border-radius:8px;background:#fff;">
     <p id="ecstatiQ-turn-indicator" style="font-weight:bold;margin:5px 0 5px 0;text-transform:uppercase;">
         Loading game...
     </p>
@@ -73,8 +76,10 @@
     <div id="ecstatiQ-interactive-board" style="margin:0 auto 15px auto;">
     </div>
     <div id="ecstatiQ-vote-feedback" style="font-weight:bold;color:#5cb85c;margin-bottom:5px;">
+        Move a light piece to vote for Chérie's next move
     </div>
-    <button id="ecstatiQ-takeback-btn" onclick="handleDeliberateTakeback()" style="display:none;margin:15px auto 15px auto;padding:8px 16px;background-color:#d9534f;color:white;border:none;border-radius:4px;font-weight:bold;cursor:pointer;font-size:13px;text-transform:uppercase;letter-spacing:0.5px;transition:background-color 0.2s;">
+    <button id="ecstatiQ-takeback-btn" onclick="handleDeliberateTakeback()"
+        style="display:none;margin:15px auto 15px auto;padding:8px 16px;background-color:#d9534f;color:white;border:none;border-radius:4px;font-weight:bold;cursor:pointer;font-size:13px;text-transform:uppercase;letter-spacing:0.5px;transition:background-color 0.2s;">
         Take Back / Change Vote
     </button>
     <div id="ecstatiQ-leaderboard-wrapper" style="font-weight:bold;margin-top:15px;padding-top:5px;text-align:left;">
@@ -91,7 +96,8 @@
         <p style="margin:0 0 10px 0;text-transform:uppercase;">
             📜 Game History
         </p>
-        <div id="ecstatiQ-move-history-log" style="background:rgb(229, 227, 215);border:1px solid #eef0f2;padding:10px;border-radius:6px;max-height:80px;overflow-y:auto;color:#000;">
+        <div id="ecstatiQ-move-history-log"
+            style="background:rgb(229, 227, 215);border:1px solid #eef0f2;padding:10px;border-radius:6px;max-height:80px;overflow-y:auto;color:#000;">
             <p>
                 No moves recorded yet...
             </p>
@@ -105,7 +111,14 @@
     var SUPABASE_KEY = '';
     var VOTING_DURATION_MINUTES = 1440;
     if (typeof window.supabaseClientInstance === 'undefined') {
-        window.supabaseClientInstance = window.supabase ? window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY) : null;
+        window.supabaseClientInstance = window.supabase ? window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
+            global: {
+                headers: {
+                    // Automatically pass their tracking ticket to Supabase securely on every transaction
+                    'x-player-session': localStorage.getItem('chess_session_token') || 'guest'
+                }
+            }
+        }) : null;
     }
     var supabase = window.supabaseClientInstance;
     var chessEngine = new Chess();
@@ -263,33 +276,29 @@
         if (!supabase) {
             return;
         }
-        const { data: voteHistory, error } = await supabase.from('move_votes').select('move_san');
+        const { data: summaryData, error } = await supabase.from('vote_leaderboard').select('*');
         const listElement = document.getElementById('ecstatiQ-vote-tally-list');
-        if (error || !voteHistory || voteHistory.length === 0) {
+        if (error || !summaryData || summaryData.length === 0) {
             listElement.innerHTML = `<li style="font-style: italic;">No votes cast yet this turn...</li>`;
             return;
         }
-        const totalVotesCount = voteHistory.length;
-        const counts = {};
-        voteHistory.forEach(v => {
-            counts[v.move_san] = (counts[v.move_san] || 0) + 1;
-        });
-        const sortedMoves = Object.keys(counts).map(move => {
-            return { name: move, votes: counts[move] };
+        const totalVotesCount = summaryData.reduce((sum, item) => sum + item.vote_count, 0);
+        const sortedMoves = summaryData.map(item => {
+            return { name: item.move_san, votes: item.vote_count };
         }).sort((a, b) => b.votes - a.votes);
-        const TOP_N = 3;
         var htmlString = '';
-        sortedMoves.slice(0, TOP_N).forEach((move, index) => {
-            const medal = index === 0 ? '🥇 ' : index === 1 ? '🥈 ' : index === 2 ? '🥉 ' : '';
+        sortedMoves.slice(0, 3).forEach((move, index) => {
+            const medal = index === 0 ? "🥇 " : index === 1 ? "🥈 " : index === 2 ? "🥉 " : "";
             const votePercentage = Math.round((move.votes / totalVotesCount) * 100);
+            const topRowClass = index === 0 ? "tally-row-top" : "";
             htmlString += `
-      <li style="color: #000; position: relative; padding: 8px 10px; margin-bottom: 6px; background: rgb(229, 227, 215); border-left: 4px solid #007bff; border-radius: 0 4px 4px 0; overflow: hidden; display: flex; justify-content: space-between; align-items: center; font-weight: ${index === 0 ? 'bold' : 'normal'}; z-index: 1;">
-        <div style="position: absolute; top: 0; left: 0; bottom: 0; width: ${votePercentage}%; background: rgb(229, 227, 215); z-index: -1; transition: width 0.3s ease;"></div>
-        <span style="position: relative; z-index: 2;">${medal}<strong>${move.name}</strong></span>
-        <span style="color: #000; font-weight: bold; position: relative; z-index: 2; background: rgba(255,255,255,0.7); padding: 2px 6px; border-radius: 4px;">
-          ${votePercentage}%
-        </span>
-      </li>`;
+          <li style="color: #000; position: relative; padding: 8px 10px; margin-bottom: 6px; background: rgb(229, 227, 215); border-left: 4px solid #007bff; border-radius: 0 4px 4px 0; overflow: hidden; display: flex; justify-content: space-between; align-items: center; font-weight: ${index === 0 ? 'bold' : 'normal'}; z-index: 1;">
+            <div style="position: absolute; top: 0; left: 0; bottom: 0; width: ${votePercentage}%; background: rgb(229, 227, 215); z-index: -1; transition: width 0.3s ease;"></div>
+            <span style="position: relative; z-index: 2;">${medal}<strong>${move.name}</strong></span>
+            <span style="color: #000; font-weight: bold; position: relative; z-index: 2; background: rgba(255,255,255,0.7); padding: 2px 6px; border-radius: 4px;">
+              ${votePercentage}%
+            </span>
+          </li>`;
         });
         listElement.innerHTML = htmlString;
     }
@@ -360,7 +369,7 @@
                 highlightVotedMoveOnUi(null);
                 window.hasUserVotedThisTurn = false;
                 document.getElementById('ecstatiQ-takeback-btn').style.display = 'none';
-                document.getElementById('ecstatiQ-vote-feedback').innerText = '';
+                document.getElementById('ecstatiQ-vote-feedback').innerText = 'Move a light piece to vote for Chérie\'s next move';
             })
             .subscribe();
         supabase.channel('public:move_votes')
